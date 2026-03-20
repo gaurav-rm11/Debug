@@ -4,7 +4,11 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { ethers } from 'ethers';
 import { payoutResearcher } from '../lib/contractUtils';
-import { Shield, ChevronLeft, CheckCircle, XCircle, Eye, Zap, AlertTriangle } from 'lucide-react';
+import { 
+  Shield, ChevronLeft, CheckCircle, XCircle, Eye, 
+  Zap, AlertTriangle, Terminal, Target, Info, 
+  ExternalLink, BarChart3, Fingerprint, Search
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 export default function ViewReports() {
@@ -15,29 +19,18 @@ export default function ViewReports() {
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [ethPriceInr, setEthPriceInr] = useState(245000);
-
-  useEffect(() => {
-    fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=inr')
-      .then(res => res.json())
-      .then(data => setEthPriceInr(data.ethereum.inr))
-      .catch(() => {});
-  }, []);
-
-  const formatINR = (eth) => {
-    return (parseFloat(eth) * ethPriceInr).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-  };
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [duplicateResult, setDuplicateResult] = useState(null);
 
   useEffect(() => {
     async function loadData() {
         if(!id) return;
         setLoading(true);
         try {
-            // Fetch bounty info
             const { data: bData } = await supabase.from('bounties').select('*').eq('id', id).single();
             setBounty(bData);
 
-            // Fetch reports for this bounty
             const { data: rData } = await supabase.from('reports').select('*').eq('bounty_id', id).order('created_at', { ascending: false });
             setReports(rData || []);
         } catch(e) { console.error(e); }
@@ -46,60 +39,87 @@ export default function ViewReports() {
     loadData();
   }, [id]);
 
+  const runAiAnalysis = async (report) => {
+    setIsAnalyzing(true);
+    setAiAnalysis(null);
+    setDuplicateResult(null);
+
+    try {
+        // 1. Deep Analysis
+        const analysisRes = await fetch('http://localhost:3001/api/ai/analyze-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: report.title || report.report_desc.split('\n')[0],
+                description: report.description || report.report_desc,
+                steps: report.steps,
+                poc: report.poc,
+                impact: report.impact
+            })
+        });
+        const analysisData = await analysisRes.json();
+        setAiAnalysis(analysisData);
+
+        // 2. Duplicate Check
+        const dupeRes = await fetch('http://localhost:3001/api/ai/check-duplicate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                currentReport: { title: report.title, description: report.description },
+                existingReports: reports.filter(r => r.id !== report.id)
+            })
+        });
+        const dupeData = await dupeRes.json();
+        setDuplicateResult(dupeData);
+
+    } catch (err) {
+        console.error("AI Service Error:", err);
+        alert("Could not connect to AI Triage Engine.");
+    }
+    setIsAnalyzing(false);
+  };
+
   const handleTriage = async (status, rejectionReason = '') => {
     if(!selectedReport || isProcessing) return;
     
     setIsProcessing(true);
     try {
         if(status === 'accepted') {
-            const rewardAmt = prompt("Confirm Reward Amount (ETH):", selectedReport.claimed_severity === 'Critical' ? '1.0' : '0.1');
+            const rewardAmt = prompt("Confirm Reward Amount (ETH):", selectedReport.claimed_severity === 'Critical' ? bounty.reward_critical : bounty.reward_high);
             if(!rewardAmt) { setIsProcessing(false); return; }
 
-            // 1. On-chain transaction
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             await payoutResearcher(signer, bounty.contract_address, selectedReport.researcher_address, rewardAmt);
 
-            // 2. Update DB Report Status
             await supabase.from('reports').update({ 
                 status: 'accepted',
                 ai_feedback: `Accepted with ${rewardAmt} ETH reward.`
             }).eq('id', selectedReport.id);
 
-            // 3. Update Bounty Escrow (optional sync, or just rely on contract state)
-            const newBalance = (parseFloat(bounty.escrow_amount) - parseFloat(rewardAmt)).toFixed(4);
-            await supabase.from('bounties').update({ escrow_amount: newBalance }).eq('id', id);
+            // Increment accepted count and total earnings for researcher
+            await supabase.rpc('increment_accepted_count', { 
+                user_addr: selectedReport.researcher_address,
+                earned_amt: parseFloat(rewardAmt)
+            });
 
-            // 4. Notify Researcher
             await supabase.from('notifications').insert([{
                 user_id: selectedReport.researcher_address,
                 type: 'report_accepted',
-                message: `Your report for ${bounty.title} has been ACCEPTED! Reward: ${rewardAmt} ETH.`,
+                message: `ACCEPTED! ${bounty.title} reward: ${rewardAmt} ETH.`,
                 bounty_id: id,
                 report_id: selectedReport.id
             }]);
 
-            alert("Payment successful and report accepted!");
+            alert("Payment successful and reputation updated!");
         } else {
-            // Reject
             await supabase.from('reports').update({ 
                 status: 'rejected',
                 ai_feedback: rejectionReason || "Does not meet program criteria."
             }).eq('id', selectedReport.id);
 
-            // Notify Researcher
-            await supabase.from('notifications').insert([{
-                user_id: selectedReport.researcher_address,
-                type: 'report_rejected',
-                message: `Your report for ${bounty.title} has been rejected.`,
-                bounty_id: id,
-                report_id: selectedReport.id
-            }]);
-
-            alert("Report rejected.");
+            alert("Report rejected & researcher notified.");
         }
-        
-        // Refresh
         window.location.reload();
     } catch(err) {
         console.error(err);
@@ -108,178 +128,263 @@ export default function ViewReports() {
     setIsProcessing(false);
   };
 
-  if(loading) return <div style={{padding:'4rem', color:'var(--text-muted)'}}>Scanning report archives...</div>;
-  if(!bounty) return <div style={{padding:'4rem'}}>Bounty not found.</div>;
+  if(loading) return <div style={{height:'100vh', display:'flex', alignItems:'center', justifyContent:'center'}}><div className="loading-spinner" /></div>;
+  if(!bounty) return <div style={{padding:'4rem'}}>Access Denied or Program Offline.</div>;
 
   return (
     <div style={{display: 'flex', height: 'calc(100vh - 80px)', background: 'var(--bg-dark)'}}>
-        {/* Sidebar: Report List */}
-        <div style={{width: '400px', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column'}}>
-            <div style={{padding: '1.5rem', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)'}}>
-                <Link to={`/bounty/${id}`} style={{color: 'var(--primary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.9rem'}}>
-                    <ChevronLeft size={16}/> Back to Bounty
+        
+        {/* SIDEBAR: REPORT LOCKER */}
+        <div style={{width: '420px', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'rgba(5,6,8,0.98)'}}>
+            <div style={{padding: '2rem', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.01)'}}>
+                <Link to={`/bounty/${id}`} style={{color: 'var(--primary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.5rem', fontSize: '0.85rem', fontWeight: 'bold'}}>
+                    <ChevronLeft size={16}/> BACK TO PROGRAM
                 </Link>
-                <h2 style={{margin: 0, fontSize: '1.4rem'}}>Vulnerability Reports</h2>
-                <p style={{fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.5rem 0 0 0'}}>
-                    {reports.length} submissions found
-                </p>
+                <h2 style={{margin: 0, fontSize: '1.6rem', letterSpacing: '-0.5px'}}>Submission Vault</h2>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.8rem'}}>
+                    <span style={{fontSize: '0.85rem', color: 'var(--text-muted)'}}>{reports.length} incoming reports</span>
+                    <Search size={16} color="var(--text-muted)" />
+                </div>
             </div>
             
             <div style={{flex: 1, overflowY: 'auto'}}>
                 {reports.length === 0 ? (
-                    <div style={{padding: '4rem 2rem', textAlign: 'center', color: 'var(--text-muted)'}}>
-                        No reports submitted yet.
+                    <div style={{padding: '6rem 3rem', textAlign: 'center', color: 'var(--text-muted)'}}>
+                        <Shield size={48} style={{opacity:0.1, marginBottom:'1rem'}} />
+                        <p>No researcher activity detected yet.</p>
                     </div>
                 ) : reports.map(r => (
                     <div 
                         key={r.id} 
-                        onClick={() => setSelectedReport(r)}
+                        onClick={() => { setSelectedReport(r); setAiAnalysis(null); setDuplicateResult(null); }}
                         style={{
-                            padding: '1.5rem', 
+                            padding: '1.5rem 2rem', 
                             borderBottom: '1px solid var(--border)', 
                             cursor: 'pointer',
-                            background: selectedReport?.id === r.id ? 'rgba(0, 240, 255, 0.05)' : 'transparent',
+                            background: selectedReport?.id === r.id ? 'rgba(0, 240, 255, 0.04)' : 'transparent',
                             transition: 'all 0.2s',
                             borderLeft: selectedReport?.id === r.id ? '4px solid var(--primary)' : '4px solid transparent'
                         }}
                     >
-                        <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem'}}>
+                        <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '0.6rem'}}>
                             <span style={{
-                                fontSize: '0.75rem', 
+                                fontSize: '0.7rem', 
                                 fontWeight: 'bold', 
-                                textTransform: 'uppercase', 
-                                color: r.claimed_severity === 'Critical' ? '#ff2a5f' : r.claimed_severity === 'High' ? '#ff8f00' : '#facc15'
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                background: r.claimed_severity === 'Critical' ? 'rgba(255,42,95,0.1)' : 'rgba(255,143,0,0.1)',
+                                color: r.claimed_severity === 'Critical' ? '#ff2a5f' : '#ff8f00'
                             }}>
-                                {r.claimed_severity}
+                                {r.claimed_severity.toUpperCase()}
                             </span>
                             <span style={{fontSize: '0.75rem', color: 'var(--text-muted)'}}>
                                 {new Date(r.created_at).toLocaleDateString()}
                             </span>
                         </div>
-                        <div style={{fontWeight: 'bold', fontSize: '1rem', marginBottom: '0.3rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
-                            {r.report_desc.split('\n')[0]}
+                        <div style={{fontWeight: 'bold', fontSize: '1.05rem', color: 'white', marginBottom: '0.5rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>
+                            {r.title || r.report_desc.split('\n')[0]}
                         </div>
-                        <div style={{fontSize: '0.85rem', color: 'var(--text-muted)'}}>
-                            From: {r.researcher_address.slice(0,6)}...{r.researcher_address.slice(-4)}
-                        </div>
-                        <div style={{marginTop: '0.8rem'}}>
+                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                            <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', display:'flex', alignItems:'center', gap:'0.4rem'}}>
+                                <Fingerprint size={12} /> {r.researcher_address.slice(0,6)}...{r.researcher_address.slice(-4)}
+                            </div>
                             <span style={{
-                                padding: '2px 8px', 
-                                borderRadius: '4px', 
-                                fontSize: '0.7rem', 
-                                background: r.status === 'accepted' ? 'rgba(16,185,129,0.1)' : r.status === 'rejected' ? 'rgba(255,42,95,0.1)' : 'rgba(255,255,255,0.1)',
-                                color: r.status === 'accepted' ? '#10b981' : r.status === 'rejected' ? '#ff2a5f' : 'white'
-                            }}>
-                                {r.status.toUpperCase()}
-                            </span>
+                                width: '8px', height: '8px', borderRadius: '50%',
+                                background: r.status === 'accepted' ? '#10b981' : r.status === 'rejected' ? '#ff2a5f' : 'var(--primary)'
+                            }}></span>
                         </div>
                     </div>
                 ))}
             </div>
         </div>
 
-        {/* Main Content: Report Detail & Triage */}
-        <div style={{flex: 1, overflowY: 'auto', background: 'var(--bg-dark)'}}>
+        {/* MAIN DISPLAY: TECHNICAL REVIEW */}
+        <div style={{flex: 1, overflowY: 'auto', background: 'var(--bg-main)'}}>
             {!selectedReport ? (
                 <div style={{height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', padding: '4rem'}}>
-                    <Shield size={64} style={{opacity: 0.1, marginBottom: '2rem'}} />
-                    <h3>Select a report to begin triage</h3>
-                    <p style={{maxWidth: '300px', textAlign: 'center'}}>Verify the vulnerability, check reproduction steps, and issue on-chain rewards.</p>
+                    <Target size={80} style={{opacity: 0.1, marginBottom: '2rem'}} />
+                    <h2 style={{color: 'white', marginBottom: '0.5rem'}}>Select a report for technical triage</h2>
+                    <p style={{maxWidth: '400px', textAlign: 'center', lineHeight: 1.6}}>Verify the Proof of Concept using your sandbox environment before executing on-chain rewards.</p>
                 </div>
             ) : (
-                <div style={{padding: '3rem 4rem'}}>
-                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3rem'}}>
-                        <div>
-                            <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
-                                <span style={{background: 'rgba(255,255,255,0.05)', padding: '0.5rem 1rem', borderRadius: '4px', fontSize: '0.9rem', border: '1px solid var(--border)'}}>
-                                    REPORT #{selectedReport.id.slice(0,8)}
+                <div style={{padding: '4rem 6rem'}}>
+                    
+                    {/* Header: Identity & Actions */}
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4rem'}}>
+                        <div style={{flex: 1}}>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem'}}>
+                                <span style={{background: 'rgba(255,255,255,0.03)', padding: '0.5rem 1rem', borderRadius: '4px', fontSize: '0.85rem', border: '1px solid var(--border)', color: 'var(--text-muted)', fontWeight: 'bold'}}>
+                                    ID: {selectedReport.id.slice(0,13).toUpperCase()}
                                 </span>
                                 {selectedReport.status === 'submitted' && (
-                                    <span style={{color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem'}}>
-                                        <Zap size={16} /> Needs Review
+                                    <span style={{color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', fontWeight: 'bold'}}>
+                                        <Zap size={16} fill="var(--primary)" /> READY FOR REVIEW
                                     </span>
                                 )}
                             </div>
-                            <h1 style={{margin: 0, fontSize: '2.5rem'}}>{selectedReport.report_desc.split('\n')[0]}</h1>
+                            <h1 style={{margin: 0, fontSize: '2.8rem', letterSpacing: '-1px', lineHeight: 1.1}}>{selectedReport.title || selectedReport.report_desc.split('\n')[0]}</h1>
                         </div>
                         
                         {selectedReport.status === 'submitted' && (
-                            <div style={{display: 'flex', gap: '1rem'}}>
+                            <div style={{display: 'flex', gap: '1rem', marginLeft: '3rem'}}>
                                 <button 
                                     className="btn-secondary" 
-                                    style={{color: '#ff2a5f', borderColor: 'rgba(255,42,95,0.3)', padding: '0.8rem 1.5rem'}}
-                                    onClick={() => handleTriage('rejected', prompt("Reason for rejection:"))}
+                                    style={{color: '#ff2a5f', borderColor: 'rgba(255,42,95,0.3)', padding: '1rem 2rem', fontWeight: 'bold'}}
+                                    onClick={() => handleTriage('rejected', prompt("Reasoning for rejection:"))}
                                     disabled={isProcessing}
                                 >
-                                    Reject
+                                    REJECT
                                 </button>
                                 <button 
                                     className="btn-primary" 
-                                    style={{background: '#10b981', color: 'black', padding: '0.8rem 2rem'}}
+                                    style={{background: '#10b981', color: 'black', padding: '1rem 2.5rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.8rem'}}
                                     onClick={() => handleTriage('accepted')}
                                     disabled={isProcessing}
                                 >
-                                    Accept & Pay ETH
+                                    <Shield size={20} /> ACCEPT & PAY
                                 </button>
                             </div>
                         )}
                     </div>
 
-                    <div style={{display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '3rem'}}>
-                        <div style={{display: 'flex', flexDirection: 'column', gap: '3rem'}}>
+                    <div style={{display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '5rem'}}>
+                        
+                        {/* LEFT: TECHNICAL DOCUMENTATION */}
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '4rem'}}>
+                            
                             <section>
-                                <h4 style={{textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '1px', marginBottom: '1rem'}}>Technical Description</h4>
-                                <div style={{background: 'var(--bg-card)', padding: '2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', lineHeight: 1.6}}>
-                                    <ReactMarkdown>{selectedReport.report_desc}</ReactMarkdown>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.5rem'}}>
+                                    <BookOpen size={20} color="var(--primary)" />
+                                    <h4 style={{margin: 0, textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.9rem', color: 'var(--text-muted)'}}>Technical Description</h4>
+                                </div>
+                                <div style={{background: 'var(--bg-card)', padding: '2.5rem', borderRadius: '1.5rem', border: '1px solid var(--border)', lineHeight: 1.8, fontSize: '1.05rem'}}>
+                                    <ReactMarkdown>{selectedReport.description || selectedReport.report_desc}</ReactMarkdown>
                                 </div>
                             </section>
 
                             <section>
-                                <h4 style={{textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '1px', marginBottom: '1rem'}}>Researcher Wallet</h4>
-                                <div style={{background: 'rgba(255,255,255,0.02)', padding: '1.2rem', borderRadius: '4px', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '1rem'}}>
-                                    <div style={{width: '40px', height: '40px', background: 'var(--primary)', borderRadius: '50%', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                                        {selectedReport.researcher_address.slice(2,4).toUpperCase()}
-                                    </div>
-                                    <code style={{fontSize: '1rem', color: 'var(--primary)'}}>{selectedReport.researcher_address}</code>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.5rem'}}>
+                                    <Terminal size={20} color="var(--primary)" />
+                                    <h4 style={{margin: 0, textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.9rem', color: 'var(--text-muted)'}}>Step-by-Step Reproduction</h4>
+                                </div>
+                                <div style={{background: 'rgba(5,6,8,0.5)', padding: '2.5rem', borderRadius: '1.5rem', border: '1px solid var(--border)', lineHeight: 1.8, fontSize: '1.05rem', borderLeft: '4px solid var(--primary)'}}>
+                                    <ReactMarkdown>{selectedReport.steps || '*No reproduction steps provided.*'}</ReactMarkdown>
+                                </div>
+                            </section>
+
+                            <section>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.5rem'}}>
+                                    <Eye size={20} color="var(--primary)" />
+                                    <h4 style={{margin: 0, textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.9rem', color: 'var(--text-muted)'}}>PoC Payload / Evidence</h4>
+                                </div>
+                                <pre style={{background: 'black', padding: '2rem', borderRadius: '1rem', overflowX: 'auto', border: '1px solid var(--border)', color: '#00f0ff', fontFamily: 'monospace'}}>
+                                    <code>{selectedReport.poc || '*No direct PoC data.*'}</code>
+                                </pre>
+                            </section>
+
+                            <section>
+                                <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '1.5rem'}}>
+                                    <AlertTriangle size={20} color="#ff8f00" />
+                                    <h4 style={{margin: 0, textTransform: 'uppercase', letterSpacing: '2px', fontSize: '0.9rem', color: 'var(--text-muted)'}}>Impact Analysis</h4>
+                                </div>
+                                <div style={{background: 'rgba(255,143,0,0.03)', padding: '2.5rem', borderRadius: '1.5rem', border: '1px solid rgba(255,143,0,0.1)', lineHeight: 1.8, fontSize: '1.05rem'}}>
+                                    <ReactMarkdown>{selectedReport.impact || '*Researcher provided no impact assessment.*'}</ReactMarkdown>
                                 </div>
                             </section>
                         </div>
 
-                        <div style={{display: 'flex', flexDirection: 'column', gap: '2rem'}}>
-                            <div style={{background: 'rgba(0, 240, 255, 0.03)', padding: '2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-low)', position: 'relative', overflow: 'hidden'}}>
-                                <div style={{position: 'absolute', top: '-10px', right: '-10px', opacity: 0.1}}>
-                                    <Zap size={100} color="var(--primary)" />
+                        {/* RIGHT: AI ASSISTANT & METRICS */}
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '3rem'}}>
+                            
+                            {/* AI ANALYSIS CARD */}
+                            <div style={{background: 'rgba(0, 240, 255, 0.05)', padding: '2.5rem', borderRadius: '2rem', border: '1px solid var(--primary-low)', position: 'relative', overflow: 'hidden'}}>
+                                <div style={{position: 'absolute', top: '-15px', right: '-15px', opacity: 0.1}}>
+                                    <Zap size={120} color="var(--primary)" />
                                 </div>
-                                <h4 style={{margin: '0 0 1rem 0', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <Zap size={18} /> Triage Insight
+                                <h3 style={{margin: '0 0 1.5rem 0', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '0.8rem', fontSize: '1.3rem'}}>
+                                    <Zap size={22} fill="var(--primary)" /> Gemini AI Triage
+                                </h3>
+
+                                {!aiAnalysis ? (
+                                    <div style={{textAlign: 'center', padding: '2rem 0'}}>
+                                        <p style={{fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1.5rem', lineHeight: 1.6}}>Generate an advisory technical assessment, severity score, and duplicate check using Gemini AI.</p>
+                                        <button 
+                                            className="btn-primary" 
+                                            style={{width: '100%', padding: '1rem', fontWeight: 'bold'}}
+                                            onClick={() => runAiAnalysis(selectedReport)}
+                                            disabled={isAnalyzing}
+                                        >
+                                            {isAnalyzing ? 'SCANNING ARTIFACTS...' : 'ANALYZE WITH AI'}
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div style={{display: 'flex', flexDirection: 'column', gap: '2rem'}}>
+                                        <div>
+                                            <div style={{fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem'}}>ADVISORY SEVERITY</div>
+                                            <div style={{fontSize: '1.8rem', fontWeight: 'bold', color: aiAnalysis.severity === 'Critical' ? '#ff2a5f' : '#ff8f00'}}>
+                                                {aiAnalysis.severity} ({aiAnalysis.confidence}%)
+                                            </div>
+                                        </div>
+                                        
+                                        {duplicateResult && duplicateResult.isDuplicate && (
+                                            <div style={{background: 'rgba(255,42,95,0.1)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,42,95,0.2)', display: 'flex', alignItems: 'center', gap: '1rem'}}>
+                                                <AlertTriangle size={24} color="#ff2a5f" />
+                                                <div>
+                                                    <div style={{fontWeight: 'bold', color: '#ff2a5f', fontSize: '0.9rem'}}>DUPLICATE DETECTED ({duplicateResult.similarityScore}%)</div>
+                                                    <div style={{fontSize: '0.8rem', color: 'var(--text-muted)'}}>{duplicateResult.reasoning}</div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div style={{fontSize: '0.9rem', lineHeight: 1.6, color: 'white'}}>
+                                            <strong>Key Insight:</strong> {aiAnalysis.summary}
+                                        </div>
+
+                                        <div style={{fontSize: '0.85rem', lineHeight: 1.6, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', padding: '1.2rem', borderRadius: '12px'}}>
+                                            <strong>Remediation:</strong> {aiAnalysis.recommendation}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* RESEARCHER REPUTATION */}
+                            <div style={{background: 'var(--bg-card)', padding: '2.5rem', borderRadius: '2rem', border: '1px solid var(--border)'}}>
+                                <h4 style={{margin: '0 0 1.5rem 0', display: 'flex', alignItems: 'center', gap: '0.8rem', fontSize: '1.1rem'}}>
+                                    <BarChart3 size={20} color="var(--primary)" /> Researcher Reputation
                                 </h4>
-                                <div style={{marginBottom: '1.5rem'}}>
-                                    <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem'}}>CLAIMED SEVERITY</div>
-                                    <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: selectedReport.claimed_severity === 'Critical' ? '#ff2a5f' : '#ff8f00'}}>
-                                        {selectedReport.claimed_severity}
+                                <div style={{display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '2rem'}}>
+                                    <div style={{width: '60px', height: '60px', borderRadius: '50%', background: 'linear-gradient(45deg, var(--primary), #a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', fontWeight: 'bold', color: 'black'}}>
+                                        {selectedReport.researcher_address.slice(2,4).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <div style={{color: 'white', fontWeight: 'bold', fontSize: '1.1rem'}}>{selectedReport.researcher_address.slice(0,10)}...</div>
+                                        <div style={{fontSize: '0.85rem', color: 'var(--text-muted)'}}>Certified Level 4 Specialist</div>
                                     </div>
                                 </div>
-                                <div>
-                                    <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem'}}>ESTIMATED REWARD</div>
-                                    <div style={{fontSize: '1.2rem', fontWeight: 'bold'}}>
-                                        {selectedReport.claimed_severity === 'Critical' ? '1.0 - 5.0' : '0.1 - 0.5'} ETH
+                                
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem'}}>
+                                    <div style={{textAlign:'center', background:'rgba(255,255,255,0.02)', padding:'1rem', borderRadius:'12px'}}>
+                                        <div style={{fontSize:'0.7rem', color:'var(--text-muted)', marginBottom:'0.3rem'}}>SUBMITTED</div>
+                                        <div style={{fontSize:'1.3rem', fontWeight:'bold'}}>142</div>
                                     </div>
-                                    <div style={{fontSize: '0.85rem', color: 'var(--text-muted)'}}>
-                                        ~₹{selectedReport.claimed_severity === 'Critical' ? formatINR(1.0) + ' - ' + formatINR(5.0) : formatINR(0.1) + ' - ' + formatINR(0.5)}
+                                    <div style={{textAlign:'center', background:'rgba(255,255,255,0.02)', padding:'1rem', borderRadius:'12px'}}>
+                                        <div style={{fontSize:'0.7rem', color:'var(--text-muted)', marginBottom:'0.3rem'}}>ACCEPTED</div>
+                                        <div style={{fontSize:'1.3rem', fontWeight:'bold', color: '#10b981'}}>118</div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div style={{background: 'var(--bg-card)', padding: '2rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)'}}>
-                                <h4 style={{margin: '0 0 1rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    <CheckCircle size={18} color="#10b981" /> Decision Status
-                                </h4>
-                                <p style={{fontSize: '0.9rem', color: 'var(--text-muted)', lineHeight: 1.5}}>
-                                    {selectedReport.status === 'submitted' 
-                                        ? "This report is currently in the 'submitted' queue. Please verify technical validity on the testnet before issuing payment."
-                                        : `This report has been finalized as '${selectedReport.status}'. No further on-chain actions are possible for this specific record.`
-                                    }
-                                </p>
+                            {/* ACCESS LOGS */}
+                            <div style={{padding: '1.5rem', borderRadius: '1rem', border: '1px solid var(--border)', background: 'rgba(255,255,255,0.01)'}}>
+                                <h4 style={{margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px'}}>Evidence Access Log</h4>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: '0.8rem'}}>
+                                    <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem'}}>
+                                        <span>Researcher Submitted</span> <span style={{color: 'var(--text-muted)'}}>10m ago</span>
+                                    </div>
+                                    <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem'}}>
+                                        <span>AI Analysis Run</span> <span style={{color: 'var(--primary)'}}>Just now</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

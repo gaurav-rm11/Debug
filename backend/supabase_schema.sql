@@ -7,14 +7,23 @@ create extension if not exists "uuid-ossp";
 create table if not exists users (
     wallet_address text primary key,
     role text not null check (role in ('researcher', 'organization')),
+    name text,
+    email text,
+    
+    -- Reputation & Stats
+    reports_submitted integer default 0,
+    reports_accepted integer default 0,
     total_earned numeric default 0,
     reputation_score integer default 0,
+    bounties_created integer default 0,
+    
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- Note: We add Name and Email columns to support the newly built Onboarding module.
-alter table users add column if not exists name text;
-alter table users add column if not exists email text;
+-- MIGRATION: Fix Users table if it already exists:
+-- alter table users add column if not exists reports_submitted integer default 0;
+-- alter table users add column if not exists reports_accepted integer default 0;
+-- alter table users add column if not exists bounties_created integer default 0;
 
 -- BOUNTIES Table
 create table if not exists bounties (
@@ -81,7 +90,18 @@ create table if not exists reports (
     bounty_id uuid references bounties(id) on delete set null,
     researcher_address text not null,
     org_address text not null,
-    report_desc text not null,
+    
+    -- Structured Content (New)
+    title text,
+    description text,
+    steps text,
+    poc text,
+    impact text,
+    attachments text[] default '{}',
+    
+    -- Legacy/Summary support
+    report_desc text, 
+    
     claimed_severity text not null,
     ai_is_valid boolean,
     ai_evaluated_severity text,
@@ -92,6 +112,12 @@ create table if not exists reports (
 );
 
 -- MIGRATION: Run these if your reports table already exists:
+-- alter table reports add column if not exists title text;
+-- alter table reports add column if not exists description text;
+-- alter table reports add column if not exists steps text;
+-- alter table reports add column if not exists poc text;
+-- alter table reports add column if not exists impact text;
+-- alter table reports add column if not exists attachments text[] default '{}';
 -- alter table reports add column if not exists org_address text;
 -- alter table reports add column if not exists status text default 'submitted';
 -- alter table reports add column if not exists ai_feedback text;
@@ -113,8 +139,6 @@ create table if not exists notifications (
 );
 
 -- We enable RLS and set extremely permissive policies for simplified development of this Prototype.
--- IN PRODUCTION: You must constrain these policies to `auth.uid() == user_id` tied to a Web3Auth provider!
-
 alter table users enable row level security;
 alter table bounties enable row level security;
 alter table reports enable row level security;
@@ -135,3 +159,36 @@ alter table notifications enable row level security;
 create policy "Public read access for notifications" on notifications for select using (true);
 create policy "Public insert access for notifications" on notifications for insert with check (true);
 create policy "Public update access for notifications" on notifications for update using (true);
+
+-- NEW MIGRATION: REPUTATION & STATISTICS RPCs
+-- 1. Increment researcher submission count
+CREATE OR REPLACE FUNCTION increment_submitted_count(user_addr text)
+RETURNS void AS $$
+BEGIN
+  UPDATE users 
+  SET reports_submitted = COALESCE(reports_submitted, 0) + 1
+  WHERE wallet_address = user_addr;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 2. Increment researcher acceptance count and earnings
+CREATE OR REPLACE FUNCTION increment_accepted_count(user_addr text, earned_amt numeric)
+RETURNS void AS $$
+BEGIN
+  UPDATE users 
+  SET reports_accepted = COALESCE(reports_accepted, 0) + 1,
+      total_earned = COALESCE(total_earned, 0) + earned_amt,
+      reputation_score = COALESCE(reputation_score, 0) + (earned_amt * 100)
+  WHERE wallet_address = user_addr;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Increment organization bounty count
+CREATE OR REPLACE FUNCTION increment_bounty_count(user_addr text)
+RETURNS void AS $$
+BEGIN
+  UPDATE users 
+  SET bounties_created = COALESCE(bounties_created, 0) + 1
+  WHERE wallet_address = user_addr;
+END;
+$$ LANGUAGE plpgsql;

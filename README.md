@@ -2,7 +2,6 @@
 
 **Debug** is a next-generation Bug Bounty platform that leverages the Ethereum blockchain for transparent, trustless escrow management and Gemini AI for automated report triage and verification.
 
-![Landing Page](frontend/public/landing_preview.png) *(Note: Add your own screenshot here)*
 
 ## 🚀 Vision
 Bridge the gap between security researchers and organizations using decentralized finance. No more delayed payouts or disputes—contracts handle the money, and AI assists the triage.

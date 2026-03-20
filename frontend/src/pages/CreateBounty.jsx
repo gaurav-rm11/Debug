@@ -3,7 +3,11 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { CheckCircle, ShieldCheck, Plus, X, Wallet } from 'lucide-react';
+import { 
+  CheckCircle, ShieldCheck, Plus, X, Wallet, 
+  Settings, Layers, Target, Coins, Shield, 
+  Briefcase, Globe, Info, Zap, AlertCircle
+} from 'lucide-react';
 import { ethers } from 'ethers';
 import { deployBountyEscrow } from '../lib/contractUtils';
 
@@ -17,32 +21,32 @@ export default function CreateBounty() {
   const [formData, setFormData] = useState({
     title: '',
     company_name: userProfile?.name || '',
-    description: 'Welcome to our bug bounty program...',
+    description: 'Welcome to our bug bounty program. We are looking for vulnerabilities in our core infrastructure...',
     
     // Rewards
     reward_type: 'Fixed',
-    min_reward: '',
-    max_reward: '',
-    reward_critical: '',
-    reward_high: '',
-    reward_medium: '',
-    reward_low: '',
+    min_reward: '0.05',
+    max_reward: '5.0',
+    reward_critical: '1.0',
+    reward_high: '0.5',
+    reward_medium: '0.1',
+    reward_low: '0.01',
     
     // Scope
     domains: [],
     domainInput: '',
-    in_scope: '## In Scope\n- *.example.com\n- API Endpoints',
-    out_of_scope: '## Out of Scope\n- Third-party services',
-    allowed_vulns: [],
+    in_scope: '## In Scope Targets\n- `*.debug-platform.io` (Main Infrastructure)\n- `api.debug-platform.io` (Public API)',
+    out_of_scope: '## Out of Scope\n- Third-party SaaS providers\n- Social engineering/Phishing',
+    allowed_vulns: ['XSS', 'SQL Injection', 'RCE'],
     
     // Policies
-    rules: 'Follow strictly responsible disclosure guidelines.',
-    policy: 'We will not pursue legal action if you follow these rules.',
-    safe_harbor: 'You are granted safe harbor for research.',
+    rules: 'No automated scanners allowed. Please respect our rate limits.',
+    policy: 'We will not initiate legal action against researchers who follow these guidelines.',
+    safe_harbor: 'You are protected by our safe harbor policy if you report bugs responsibly.',
     
     // Guidelines
-    guidelines: 'Please provide a clear Proof of Concept (PoC).',
-    timeline: 'We aim to respond within 3 business days.',
+    guidelines: 'Please include detailed reproduction steps and a clear PoC script.',
+    timeline: '3 Business Days',
 
     // Visibility
     visibility: 'public',
@@ -66,56 +70,40 @@ export default function CreateBounty() {
 
   const toggleVuln = (v) => {
     if(formData.allowed_vulns.includes(v)) {
-      setFormData(prev => ({ ...prev, allowed_vulns: prev.allowed_vulns.filter(val => val !== v) }));
+      setFormData(prev => ({ ...prev, allowed_vulns: formData.allowed_vulns.filter(val => val !== v) }));
     } else {
-      setFormData(prev => ({ ...prev, allowed_vulns: [...prev.allowed_vulns, v] }));
+      setFormData(prev => ({ ...prev, allowed_vulns: [...formData.allowed_vulns, v] }));
     }
   };
 
   const handlePublish = async (status) => {
     if(!formData.title || !formData.company_name) {
-        alert("Please fill out the required Program Name and Company Name.");
+        alert("Primary fields (Program Title, Company Name) are required.");
         return;
     }
     
     setIsSubmitting(true);
     
     try {
-      // 1. Validate Provider & Network
-      if (!window.ethereum) throw new Error("MetaMask not found. Please install it to deploy bounties.");
+      if (!window.ethereum) throw new Error("MetaMask is required for on-chain escrow deployment.");
       const provider = new ethers.BrowserProvider(window.ethereum);
-      
       const network = await provider.getNetwork();
-      console.log("Connected to Network:", network.chainId.toString());
-      if (network.chainId !== 1337n && network.chainId !== 31337n) {
-          // Warning if not on Localhost (adjust if you're using a different testnet)
-          console.warn("Chain ID is not a standard Localhost ID. Ensure MetaMask points to your Hardhat node.");
-      }
-
+      
       const signer = await provider.getSigner();
       const signerAddr = await signer.getAddress();
-      console.log("Deploying with Signer:", signerAddr);
-
-      // Check balance before deployment
       const balance = await provider.getBalance(signerAddr);
-      console.log("Current Balance:", ethers.formatEther(balance), "ETH");
 
-      // 2. Real contract deployment
-      const initialDeposit = formData.reward_critical || "0.01";
+      // We use 'reward_critical' as the initial escrow deposit
+      const initialDeposit = formData.reward_critical || "0.1";
       const initialDepositWei = ethers.parseEther(initialDeposit.toString());
-      console.log("Initial Deposit Wei:", initialDepositWei.toString());
       
-      if (balance < initialDepositWei) {
-          throw new Error(`Insufficient funds: You have ${ethers.formatEther(balance)} ETH but need at least ${initialDeposit} ETH plus gas.`);
+      if (balance < initialDepositWei && status === 'Active') {
+          throw new Error(`Insufficient Balance. Required: ${initialDeposit} ETH. Available: ${ethers.formatEther(balance)} ETH.`);
       }
 
-      let deployedAddress = "";
+      let deployedAddress = "0x0000000000000000000000000000000000000000";
       if (status === 'Active') {
-          console.log("Calling deployBountyEscrow...");
           deployedAddress = await deployBountyEscrow(signer, formData.title, initialDeposit);
-          console.log("Deployed successfully at:", deployedAddress);
-      } else {
-          deployedAddress = "0x0000000000000000000000000000000000000000";
       }
 
       const payload = {
@@ -150,224 +138,317 @@ export default function CreateBounty() {
           invited_users: formData.invited_users_input.split(',').map(s => s.trim()).filter(s => s.length > 0)
       };
 
-      const { data, error } = await supabase.from('bounties').insert([payload]).select();
+      const { error } = await supabase.from('bounties').insert([payload]);
       if(error) throw error;
       
-      alert(status === 'Active' ? `Bounty deployed successfully at ${deployedAddress}` : "Draft saved.");
+      // Update Org Statistics
+      await supabase.rpc('increment_bounty_count', { user_addr: account });
+
+      alert(status === 'Active' ? `Bounty officially live on-chain!` : "Draft preserved.");
       navigate('/bounties');
     } catch(err) {
-      console.error("FULL DEPLOYMENT ERROR OBJECT:", err);
-      
-      let msg = err.message || "Failed to create bounty.";
-      if (err.code === -32603) {
-          msg = "MetaMask Internal Error (-32603). This is usually caused by a 'Nonce Mismatch' if you recently restarted your Hardhat node. \n\nFIX: Go to MetaMask -> Settings -> Advanced -> Clear Activity Tab Data (Reset Account).";
-      } else if (err.message.includes("reverted")) {
-          msg = "Transaction Reverted: The contract deployment failed on-chain. Check if your account has enough ETH or if you're on the correct network.";
-      }
-      
-      alert(msg);
+      console.error(err);
+      alert(err.message || "Bounty deployment failed.");
     }
     
     setIsSubmitting(false);
   };
 
   return (
-    <div style={{display: 'flex', minHeight: 'calc(100vh - 80px)'}}>
-        {/* Left Side: Creation Form */}
-        <div style={{flex: 1, padding: '3rem 4rem', overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--bg-dark)'}}>
-            <h1 className="text-gradient" style={{marginTop: 0, marginBottom: '0.5rem'}}>Architect Bug Bounty</h1>
-            <p className="feature-desc" style={{marginBottom: '3rem'}}>Construct the rules, scope, and reward matrices for your new decentralized program.</p>
+    <div style={{display: 'flex', minHeight: 'calc(100vh - 80px)', background: 'var(--bg-dark)'}}>
+        
+        {/* LEFT: ARCHITECT FORM */}
+        <div style={{flex: 1, padding: '3.5rem 5rem', overflowY: 'auto', borderRight: '1px solid var(--border)', background: 'var(--bg-main)'}}>
+            <div style={{marginBottom: '4rem'}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                    <div style={{width: '40px', height: '40px', background: 'var(--primary)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                        <Layers size={22} color="black" />
+                    </div>
+                    <span style={{color: 'var(--primary)', fontWeight: 'bold', letterSpacing: '2px', fontSize: '0.8rem'}}>PROGRAM ARCHITECT</span>
+                </div>
+                <h1 className="text-gradient" style={{fontSize: '3.5rem', marginBottom: '1rem', letterSpacing: '-1.5px'}}>Design Your Program</h1>
+                <p style={{color: 'var(--text-muted)', fontSize: '1.2rem', maxWidth: '800px'}}>Define the security boundaries, reward tiers, and legal policies for your decentralized bug bounty.</p>
+            </div>
 
-            <div style={{display: 'flex', flexDirection: 'column', gap: '3rem'}}>
-                {/* Section 1 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>1.</span> Basic Information</h3>
-                    <div style={{display: 'flex', gap: '1rem', marginBottom: '1rem'}}>
-                        <div style={{flex: 1}}>
-                            <label>Program Title *</label>
-                            <input type="text" className="input-field" value={formData.title} onChange={e=>handleUpdate('title', e.target.value)} placeholder="e.g. Core Protocol V3 Bounty" />
+            <div style={{display: 'flex', flexDirection: 'column', gap: '3.5rem'}}>
+                
+                {/* Section 1: Core Identity */}
+                <section className="glass-panel" style={{padding: '2.5rem', position: 'relative'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2.5rem'}}>
+                        <Briefcase size={22} color="var(--primary)" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>1. Program Identity</h3>
+                    </div>
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem'}}>
+                        <div className="form-group">
+                            <label>Program Public Title *</label>
+                            <input type="text" className="input-field" value={formData.title} onChange={e=>handleUpdate('title', e.target.value)} placeholder="e.g. DeFi Core Protocol V2" />
                         </div>
-                        <div style={{flex: 1}}>
-                            <label>Company Name *</label>
-                            <input type="text" className="input-field" value={formData.company_name} onChange={e=>handleUpdate('company_name', e.target.value)} />
+                        <div className="form-group">
+                            <label>Organization / Brand Name *</label>
+                            <input type="text" className="input-field" value={formData.company_name} onChange={e=>handleUpdate('company_name', e.target.value)} placeholder="e.g. Acme Labs" />
                         </div>
                     </div>
-                    <label>Executive Summary (Markdown) *</label>
-                    <textarea className="input-field" style={{minHeight: '120px'}} value={formData.description} onChange={e=>handleUpdate('description', e.target.value)} placeholder="High-level overview of your platform..." />
+                    <div className="form-group" style={{marginTop: '2rem'}}>
+                        <label>Executive Summary (Markdown) *</label>
+                        <textarea className="input-field" style={{minHeight: '140px'}} value={formData.description} onChange={e=>handleUpdate('description', e.target.value)} placeholder="Introduce your project and security vision..." />
+                    </div>
                 </section>
 
-                {/* Section 2 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>2.</span> Rewards Engine (ETH)</h3>
+                {/* Section 2: Financial Matrix */}
+                <section className="glass-panel" style={{padding: '2.5rem'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2.5rem'}}>
+                        <Coins size={22} color="#facc15" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>2. Financial Reward Matrix (ETH)</h3>
+                    </div>
                     
-                    <div style={{display: 'flex', gap: '1rem', marginBottom: '1.5rem'}}>
-                         <div style={{flex: 1}}>
-                            <label>Reward Type</label>
+                    <div style={{display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: '2rem', marginBottom: '3rem'}}>
+                         <div className="form-group">
+                            <label>Payout Strategy</label>
                             <select className="input-field" value={formData.reward_type} onChange={e=>handleUpdate('reward_type', e.target.value)}>
-                                <option value="Fixed">Fixed Severity</option>
-                                <option value="Range">Variable Range</option>
+                                <option value="Fixed">Fixed Severity (Standard)</option>
+                                <option value="Range">Variable Range (Competitive)</option>
                             </select>
                         </div>
-                        <div style={{flex: 1}}>
-                            <label>Min Payout</label>
-                            <input type="number" className="input-field" value={formData.min_reward} onChange={e=>handleUpdate('min_reward', e.target.value)} placeholder="0.05" />
+                        <div className="form-group">
+                            <label>Global Min ETH</label>
+                            <input type="text" className="input-field" value={formData.min_reward} onChange={e=>handleUpdate('min_reward', e.target.value)} />
                         </div>
-                        <div style={{flex: 1}}>
-                            <label>Max Payout</label>
-                            <input type="number" className="input-field" value={formData.max_reward} onChange={e=>handleUpdate('max_reward', e.target.value)} placeholder="10.0" />
+                        <div className="form-group">
+                            <label>Global Max ETH</label>
+                            <input type="text" className="input-field" value={formData.max_reward} onChange={e=>handleUpdate('max_reward', e.target.value)} />
                         </div>
                     </div>
 
-                    <label style={{marginBottom: '1rem', display: 'block'}}>Severity Smart Contract Allocations</label>
-                    <div style={{display: 'flex', gap: '1rem'}}>
-                        <div style={{flex: 1}}><label style={{fontSize: '0.8rem', color: '#ff2a5f'}}>Critical</label><input type="number" className="input-field" value={formData.reward_critical} onChange={e=>handleUpdate('reward_critical', e.target.value)} placeholder="10.0"/></div>
-                        <div style={{flex: 1}}><label style={{fontSize: '0.8rem', color: '#ff8f00'}}>High</label><input type="number" className="input-field" value={formData.reward_high} onChange={e=>handleUpdate('reward_high', e.target.value)} placeholder="5.0"/></div>
-                        <div style={{flex: 1}}><label style={{fontSize: '0.8rem', color: '#facc15'}}>Medium</label><input type="number" className="input-field" value={formData.reward_medium} onChange={e=>handleUpdate('reward_medium', e.target.value)} placeholder="1.0"/></div>
-                        <div style={{flex: 1}}><label style={{fontSize: '0.8rem', color: '#10b981'}}>Low</label><input type="number" className="input-field" value={formData.reward_low} onChange={e=>handleUpdate('reward_low', e.target.value)} placeholder="0.1"/></div>
+                    <label style={{marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1.1rem'}}>
+                        <Wallet size={18} color="var(--primary)" /> Severity-Based Escrow Targets
+                    </label>
+                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.5rem'}}>
+                        <div className="form-group"><label style={{color: '#ff2a5f', fontWeight: 'bold'}}>CRITICAL</label><input type="text" className="input-field" value={formData.reward_critical} onChange={e=>handleUpdate('reward_critical', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#ff8f00', fontWeight: 'bold'}}>HIGH</label><input type="text" className="input-field" value={formData.reward_high} onChange={e=>handleUpdate('reward_high', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#facc15', fontWeight: 'bold'}}>MEDIUM</label><input type="text" className="input-field" value={formData.reward_medium} onChange={e=>handleUpdate('reward_medium', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#10b981', fontWeight: 'bold'}}>LOW</label><input type="text" className="input-field" value={formData.reward_low} onChange={e=>handleUpdate('reward_low', e.target.value)} /></div>
                     </div>
                 </section>
 
-                {/* Section 3 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>3.</span> Targeted Scope</h3>
-                    
-                    <label>Domains & Assets</label>
-                    <div style={{display: 'flex', gap: '1rem', marginBottom: '1rem'}}>
-                        <input type="text" className="input-field" value={formData.domainInput} onChange={e=>handleUpdate('domainInput', e.target.value)} placeholder="api.company.com" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addDomain())} />
-                        <button className="btn-secondary" onClick={(e) => { e.preventDefault(); addDomain(); }}>Add Asset</button>
+                {/* Section 3: Technical Scope */}
+                <section className="glass-panel" style={{padding: '2.5rem'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '3rem'}}>
+                        <ShieldCheck size={22} color="#10b981" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>3. Technical Scope Boundaries</h3>
                     </div>
-                    {formData.domains.length > 0 && (
-                        <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1.5rem'}}>
-                            {formData.domains.map((dom, i) => (
-                                <span key={i} style={{background: 'rgba(255,255,255,0.1)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-                                    {dom} <X size={14} style={{cursor: 'pointer'}} onClick={()=>removeDomain(i)} />
-                                </span>
+                    
+                    <div style={{marginBottom: '2.5rem'}}>
+                        <label>Asset Register (Root Domains/Repos)</label>
+                        <div style={{display: 'flex', gap: '1rem', marginBottom: '1.5rem'}}>
+                            <input type="text" className="input-field" value={formData.domainInput} onChange={e=>handleUpdate('domainInput', e.target.value)} placeholder="api.site.com" onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addDomain())} />
+                            <button className="btn-secondary" style={{padding: '0 2rem'}} onClick={(e) => { e.preventDefault(); addDomain(); }}>Add</button>
+                        </div>
+                        {formData.domains.length > 0 && (
+                            <div style={{display: 'flex', gap: '0.8rem', flexWrap: 'wrap', marginBottom: '2rem'}}>
+                                {formData.domains.map((dom, i) => (
+                                    <span key={i} style={{background: 'rgba(255,255,255,0.05)', padding: '0.6rem 1rem', borderRadius: '8px', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.8rem', border: '1px solid var(--border)'}}>
+                                        {dom} <X size={16} style={{cursor: 'pointer', color: '#ff2a5f'}} onClick={()=>removeDomain(i)} />
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2.5rem', marginBottom: '2.5rem'}}>
+                        <div className="form-group">
+                            <label>In-Scope Breakdown (Markdown)</label>
+                            <textarea className="input-field" style={{minHeight: '120px'}} value={formData.in_scope} onChange={e=>handleUpdate('in_scope', e.target.value)} />
+                        </div>
+                        <div className="form-group">
+                            <label>Explicit Out-of-Scope (Markdown)</label>
+                            <textarea className="input-field" style={{minHeight: '120px'}} value={formData.out_of_scope} onChange={e=>handleUpdate('out_of_scope', e.target.value)} />
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label style={{marginBottom: '1rem', display: 'block'}}>Primary Areas of Focus</label>
+                        <div style={{display: 'flex', flexWrap: 'wrap', gap: '1rem'}}>
+                            {VULN_TYPES.map(v => (
+                                <button 
+                                    key={v} 
+                                    onClick={(e) => { e.preventDefault(); toggleVuln(v); }}
+                                    className={formData.allowed_vulns.includes(v) ? 'btn-select-active' : 'btn-select-inactive'}
+                                >
+                                    {v}
+                                </button>
                             ))}
                         </div>
-                    )}
-
-                    <div style={{display: 'flex', gap: '1rem', marginBottom: '1.5rem'}}>
-                        <div style={{flex: 1}}>
-                            <label>In-Scope (Markdown)</label>
-                            <textarea className="input-field" style={{minHeight: '100px'}} value={formData.in_scope} onChange={e=>handleUpdate('in_scope', e.target.value)} />
-                        </div>
-                        <div style={{flex: 1}}>
-                            <label>Out-of-Scope (Markdown)</label>
-                            <textarea className="input-field" style={{minHeight: '100px'}} value={formData.out_of_scope} onChange={e=>handleUpdate('out_of_scope', e.target.value)} />
-                        </div>
-                    </div>
-
-                    <label style={{marginBottom: '0.5rem', display: 'block'}}>Allowed Vulnerabilities</label>
-                    <div style={{display: 'flex', flexWrap: 'wrap', gap: '0.8rem'}}>
-                        {VULN_TYPES.map(v => (
-                            <button 
-                                key={v} 
-                                onClick={(e) => { e.preventDefault(); toggleVuln(v); }}
-                                className={formData.allowed_vulns.includes(v) ? 'btn-primary' : 'btn-secondary'}
-                                style={{padding: '0.4rem 1rem', fontSize: '0.85rem', borderRadius: 'var(--radius-full)'}}
-                            >
-                                {v}
-                            </button>
-                        ))}
                     </div>
                 </section>
 
-                {/* Section 4 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>4.</span> Rules & Legal Policy</h3>
-                    <label>Rules (Markdown)</label>
-                    <textarea className="input-field" style={{minHeight: '80px', marginBottom: '1rem'}} value={formData.rules} onChange={e=>handleUpdate('rules', e.target.value)} />
-                    <label>Legal Safe Harbor (Markdown)</label>
-                    <textarea className="input-field" style={{minHeight: '80px', marginBottom: '1rem'}} value={formData.safe_harbor} onChange={e=>handleUpdate('safe_harbor', e.target.value)} />
+                {/* Section 4: Rules & Legal */}
+                <section className="glass-panel" style={{padding: '2.5rem'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2.5rem'}}>
+                        <Shield size={22} color="var(--primary)" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>4. Rules & Safe Harbor</h3>
+                    </div>
+                    <div className="form-group" style={{marginBottom: '2rem'}}>
+                        <label>Rules of Engagement (Markdown)</label>
+                        <textarea className="input-field" style={{minHeight: '100px'}} value={formData.rules} onChange={e=>handleUpdate('rules', e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <label>Legal Policy & Safe Harbor Statement (Markdown)</label>
+                        <textarea className="input-field" style={{minHeight: '100px'}} value={formData.safe_harbor} onChange={e=>handleUpdate('safe_harbor', e.target.value)} />
+                    </div>
                 </section>
 
-                {/* Section 5 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>5.</span> Submission Guidelines</h3>
-                    <label>Requirements (Markdown)</label>
-                    <textarea className="input-field" style={{minHeight: '80px', marginBottom: '1rem'}} value={formData.guidelines} onChange={e=>handleUpdate('guidelines', e.target.value)} />
-                    <label>Response Timeline</label>
-                    <input type="text" className="input-field" value={formData.timeline} onChange={e=>handleUpdate('timeline', e.target.value)} placeholder="e.g. 5 business days" />
+                {/* Section 5: Guidelines & Timeline */}
+                <section className="glass-panel" style={{padding: '2.5rem'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2.5rem'}}>
+                        <Zap size={22} color="var(--primary)" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>5. Submission & Response</h3>
+                    </div>
+                    <div className="form-group" style={{marginBottom: '2rem'}}>
+                        <label>Submission Requirements (Markdown)</label>
+                        <textarea className="input-field" style={{minHeight: '100px'}} value={formData.guidelines} onChange={e=>handleUpdate('guidelines', e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                        <label>Average Response Timeline</label>
+                        <input type="text" className="input-field" value={formData.timeline} onChange={e=>handleUpdate('timeline', e.target.value)} placeholder="e.g. 48 Hours" />
+                    </div>
                 </section>
                 
-                {/* Section 6 */}
-                <section>
-                    <h3 style={{borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem', marginBottom: '1.5rem'}}><span style={{color:'var(--primary)'}}>6.</span> Program Visibility</h3>
-                    <div style={{display: 'flex', gap: '2rem', marginBottom: '1.5rem'}}>
-                        <div style={{flex: 1}}>
-                            <label>Visibility Status</label>
-                            <select className="input-field" value={formData.visibility} onChange={e=>handleUpdate('visibility', e.target.value)}>
-                                <option value="public">Public (Visible to everyone)</option>
-                                <option value="private">Private (Invite-only)</option>
-                            </select>
+                {/* Section 6: Visibility Controls */}
+                <section className="glass-panel" style={{padding: '2.5rem', border: '1px solid var(--primary-low)'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2.5rem'}}>
+                        <Globe size={22} color="var(--primary)" />
+                        <h3 style={{margin: 0, fontSize: '1.4rem'}}>6. Program Visibility & Access</h3>
+                    </div>
+                    <div className="form-group" style={{marginBottom: '2rem'}}>
+                        <label>Access Type</label>
+                        <div style={{display: 'flex', gap: '1rem'}}>
+                            <button 
+                                className={formData.visibility === 'public' ? 'btn-select-active' : 'btn-select-inactive'} 
+                                onClick={(e) => { e.preventDefault(); handleUpdate('visibility', 'public'); }}
+                                style={{flex: 1}}
+                            >
+                                Public Recruitment
+                            </button>
+                            <button 
+                                className={formData.visibility === 'private' ? 'btn-select-active' : 'btn-select-inactive'} 
+                                onClick={(e) => { e.preventDefault(); handleUpdate('visibility', 'private'); }}
+                                style={{flex: 1}}
+                            >
+                                Private Invitation
+                            </button>
                         </div>
                     </div>
                     {formData.visibility === 'private' && (
-                        <div>
-                            <label>Invited Researchers (Comma separated wallet addresses)</label>
+                        <div className="form-group">
+                            <label>Researcher Whitelist (Wallet addresses, comma separated)</label>
                             <textarea 
                                 className="input-field" 
-                                style={{minHeight: '80px'}} 
+                                style={{minHeight: '100px'}} 
                                 value={formData.invited_users_input} 
                                 onChange={e=>handleUpdate('invited_users_input', e.target.value)} 
-                                placeholder="0x123..., 0x456..." 
+                                placeholder="0xabc..., 0xdef..." 
                             />
-                            <p style={{fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem'}}>Only these users will be able to see and submit to this bounty.</p>
+                            <div style={{display:'flex', gap:'0.5rem', alignItems:'center', marginTop:'0.8rem', color:'var(--text-muted)', fontSize:'0.85rem'}}>
+                                <Info size={14} /> Only these addresses will see the bounty program in their explorer.
+                            </div>
                         </div>
                     )}
                 </section>
             </div>
             
-            <div style={{position: 'sticky', bottom: '0', background: 'rgba(5,6,8,0.95)', padding: '1.5rem 0', borderTop: '1px solid var(--border)', display: 'flex', gap: '1rem', marginTop: '4rem'}}>
-                <button className="btn-secondary" style={{flex: 1, padding: '1.2rem'}} onClick={() => handlePublish('Draft')} disabled={isSubmitting}>Save as Draft</button>
-                <button className="btn-primary" style={{flex: 2, padding: '1.2rem'}} onClick={() => handlePublish('Active')} disabled={isSubmitting}>
-                    {isSubmitting ? 'Deploying to Chain...' : 'Publish Bounty Program'}
+            <div style={{position: 'sticky', bottom: '0', background: 'rgba(5,6,8,0.98)', padding: '2.5rem 0', borderTop: '1px solid var(--border)', display: 'flex', gap: '1.5rem', marginTop: '5rem', zIndex: 50}}>
+                <button className="btn-secondary" style={{flex: 1, padding: '1.4rem', fontSize: '1.1rem'}} onClick={() => handlePublish('Draft')} disabled={isSubmitting}>Save Program Draft</button>
+                <button 
+                    className="btn-primary" 
+                    style={{flex: 2, padding: '1.4rem', fontSize: '1.2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.8rem'}} 
+                    onClick={() => handlePublish('Active')} 
+                    disabled={isSubmitting}
+                >
+                    {isSubmitting ? (
+                        <><div className="loading-spinner" style={{width: '24px', height: '24px'}} /> DEPLOYING ESCROW...</>
+                    ) : (
+                        <><ShieldCheck size={24} /> PUBLISH & DEPLOY TO BLOCKCHAIN</>
+                    )}
                 </button>
             </div>
         </div>
 
-        {/* Right Side: Live Interactive Preview */}
-        <div style={{flex: 1, padding: '3rem 4rem', overflowY: 'auto', background: 'var(--bg-card)'}}>
-            <div style={{background: 'rgba(0, 240, 255, 0.1)', display: 'inline-block', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-full)', color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '1rem'}}>
-                 Live Preview
+        {/* RIGHT: LIVE DESIGN PREVIEW */}
+        <div style={{width: '45%', padding: '4rem 5rem', overflowY: 'auto', background: 'var(--bg-card)', position: 'sticky', top: 0, height: '100vh'}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '2rem'}}>
+                <div style={{width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981'}}></div>
+                <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)', letterSpacing: '2px'}}>LIVE ARCHITECT PREVIEW</span>
             </div>
-            <h1 style={{fontSize: '2.5rem', margin: '0 0 0.5rem 0', lineHeight: 1.1}}>{formData.title || 'Program Name'}</h1>
-            <p style={{fontSize: '1.1rem', color: 'var(--text-muted)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '2rem'}}>
-                <ShieldCheck size={18} /> Hosted by {formData.company_name || 'Organization Name'}
-            </p>
-
-            <div style={{background: 'rgba(255,255,255,0.02)', padding: '2rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)'}}>
-                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '1rem'}}>
-                    <div>
-                        <div style={{color: 'var(--text-muted)', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px'}}>Reward Structure</div>
-                        <div className="text-gradient" style={{fontSize: '2rem', fontWeight: 'bold'}}>{formData.reward_type}</div>
-                    </div>
-                    <div style={{textAlign: 'right'}}>
-                         <div style={{color: 'var(--text-muted)', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px'}}>Max Reward</div>
-                         <div style={{fontSize: '2rem', fontWeight: 'bold', color: 'var(--primary)'}}>{formData.max_reward || formData.reward_critical || '0'} ETH</div>
-                    </div>
+            
+            <div style={{background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: '24px', overflow: 'hidden', boxShadow: '0 20px 40px rgba(0,0,0,0.4)'}}>
+                <div style={{height: '180px', background: 'linear-gradient(135deg, var(--primary) 0%, #a855f7 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative'}}>
+                     <Shield size={64} color="black" style={{opacity: 0.2}} />
+                     <div style={{position: 'absolute', bottom: '1.5rem', left: '2rem', display: 'flex', alignItems: 'center', gap: '0.8rem'}}>
+                         <div style={{padding: '0.5rem 1rem', background: 'white', color: 'black', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 'bold'}}>
+                            {formData.visibility.toUpperCase()}
+                         </div>
+                         <div style={{padding: '0.5rem 1rem', background: 'rgba(0,0,0,0.3)', color: 'white', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 'bold', border: '1px solid rgba(255,255,255,0.2)'}}>
+                            ON-CHAIN ESCROW
+                         </div>
+                     </div>
                 </div>
-
-                <h4 style={{color: 'var(--text-muted)'}}>Executive Summary</h4>
-                <div style={{marginBottom: '2rem', lineHeight: 1.6}}><ReactMarkdown>{formData.description}</ReactMarkdown></div>
-
-                <h4 style={{color: 'var(--text-muted)'}}>In-Scope Targets</h4>
-                <div style={{marginBottom: '2rem', color: '#10b981'}}><ReactMarkdown>{formData.in_scope}</ReactMarkdown></div>
                 
-                <h4 style={{color: 'var(--text-muted)'}}>Allowed Vulnerability Types</h4>
-                <div style={{display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '2rem'}}>
-                    {formData.allowed_vulns.length === 0 ? <span style={{opacity:0.5}}>No selections yet</span> : formData.allowed_vulns.map(v => (
-                        <span key={v} style={{background: 'var(--primary)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem'}}>{v}</span>
-                    ))}
-                </div>
+                <div style={{padding: '3rem'}}>
+                    <h1 style={{fontSize: '3rem', margin: '0 0 1rem 0', letterSpacing: '-1px'}}>{formData.title || 'Untitled Program Architect'}</h1>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', color: 'var(--text-muted)', marginBottom: '3rem'}}>
+                        <Building2 size={20} color="var(--primary)" />
+                        <span style={{fontSize: '1.1rem'}}>Hosted by <span style={{color: 'white', fontWeight: 'bold'}}>{formData.company_name || 'Acme Tech'}</span></span>
+                    </div>
 
-                <div style={{background: 'rgba(250, 204, 21, 0.05)', padding: '1.5rem', borderRadius: '4px', marginTop: '2rem'}}>
-                    <h4 style={{margin: '0 0 1rem 0', color: '#facc15'}}>Payout Matrix</h4>
-                    <div style={{display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem', marginBottom: '0.5rem'}}><span style={{color:'#ff2a5f'}}>Critical</span> <span>{formData.reward_critical || '0'} ETH</span></div>
-                    <div style={{display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem', marginBottom: '0.5rem'}}><span style={{color:'#ff8f00'}}>High</span> <span>{formData.reward_high || '0'} ETH</span></div>
-                    <div style={{display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem', marginBottom: '0.5rem'}}><span style={{color:'#facc15'}}>Medium</span> <span>{formData.reward_medium || '0'} ETH</span></div>
-                    <div style={{display: 'flex', justifyContent: 'space-between'}}><span style={{color:'#10b981'}}>Low</span> <span>{formData.reward_low || '0'} ETH</span></div>
+                    <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', marginBottom: '4rem'}}>
+                        <div style={{background: 'rgba(255,255,255,0.02)', padding: '2rem', borderRadius: '16px', border: '1px solid var(--border)'}}>
+                            <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem'}}>Base Payout</div>
+                            <div style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'var(--primary)'}}>{formData.min_reward} ETH</div>
+                        </div>
+                        <div style={{background: 'rgba(0, 240, 255, 0.05)', padding: '2rem', borderRadius: '16px', border: '1px solid var(--primary-low)'}}>
+                            <div style={{fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '0.5rem'}}>Max Potential</div>
+                            <div style={{fontSize: '1.8rem', fontWeight: 'bold', color: 'white'}}>{formData.max_reward} ETH</div>
+                        </div>
+                    </div>
+
+                    <div style={{marginBottom: '4rem'}}>
+                        <h4 style={{fontSize: '1.1rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.6rem'}}>
+                            <Target size={18} color="var(--primary)" /> Scope Focus
+                        </h4>
+                        <div style={{display: 'flex', flexWrap: 'wrap', gap: '0.8rem'}}>
+                            {formData.allowed_vulns.map(v => (
+                                <span key={v} style={{padding: '0.5rem 1.2rem', background: 'rgba(255,255,255,0.05)', borderRadius: 'var(--radius-full)', fontSize: '0.8rem', border: '1px solid var(--border)'}}>
+                                    {v}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div style={{borderTop: '1px solid var(--border)', paddingTop: '3rem'}}>
+                        <h4 style={{fontSize: '1.1rem', marginBottom: '1.5rem'}}>Program Logic</h4>
+                        <div className="preview-markdown" style={{color: 'var(--text-muted)', lineHeight: 1.8}}>
+                            <ReactMarkdown>{formData.description}</ReactMarkdown>
+                        </div>
+                    </div>
+
+                    <div style={{background: 'rgba(255,42,95,0.03)', padding: '2.5rem', borderRadius: '16px', marginTop: '4rem', border: '1px solid rgba(255,42,95,0.1)'}}>
+                        <h4 style={{margin: '0 0 1.5rem 0', color: '#ff2a5f'}}>Payout Probability</h4>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '1.2rem'}}>
+                            <div style={{display: 'flex', justifyContent: 'space-between'}}><span style={{color: '#ff2a5f'}}>Critical Vuln</span> <span style={{fontWeight:'bold'}}>{formData.reward_critical} ETH</span></div>
+                            <div style={{display: 'flex', justifyContent: 'space-between'}}><span style={{color: '#ff8f00'}}>High Persistence</span> <span style={{fontWeight:'bold'}}>{formData.reward_high} ETH</span></div>
+                            <div style={{display: 'flex', justifyContent: 'space-between'}}><span style={{color: '#facc15'}}>Medium Risk</span> <span style={{fontWeight:'bold'}}>{formData.reward_medium} ETH</span></div>
+                            <div style={{display: 'flex', justifyContent: 'space-between'}}><span style={{color: '#10b981'}}>Informational</span> <span style={{fontWeight:'bold'}}>{formData.reward_low} ETH</span></div>
+                        </div>
+                    </div>
                 </div>
+            </div>
+            
+            <div style={{marginTop: '4rem', padding: '2rem', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid var(--border)', display: 'flex', gap: '1.5rem', alignItems: 'center'}}>
+                 <AlertCircle size={32} color="#facc15" />
+                 <div>
+                     <div style={{fontWeight: 'bold', fontSize: '1rem', marginBottom: '0.2rem'}}>Smart Contract Integrity</div>
+                     <p style={{margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)'}}>Deploying will lock the 'Critical' reward amount into the Escrow contract on-chain.</p>
+                 </div>
             </div>
         </div>
     </div>
