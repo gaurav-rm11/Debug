@@ -6,7 +6,7 @@ import ReactMarkdown from 'react-markdown';
 import { 
   CheckCircle, ShieldCheck, Plus, X, Wallet, 
   Settings, Layers, Target, Coins, Shield, 
-  Briefcase, Globe, Info, Zap, AlertCircle
+  Briefcase, Globe, Info, Zap, AlertCircle, Building2
 } from 'lucide-react';
 import { ethers } from 'ethers';
 import { deployBountyEscrow } from '../lib/contractUtils';
@@ -190,7 +190,7 @@ export default function CreateBounty() {
                     </div>
                     <div className="form-group" style={{marginTop: '2rem'}}>
                         <label>Executive Summary (Markdown) *</label>
-                        <textarea className="input-field" style={{minHeight: '140px'}} value={formData.description} onChange={e=>handleUpdate('description', e.target.value)} placeholder="Introduce your project and security vision..." />
+                        <textarea className="input-field" style={{minHeight: '140px', fontFamily: 'var(--font-mono)', fontSize: '0.95rem'}} value={formData.description} onChange={e=>handleUpdate('description', e.target.value)} placeholder="Introduce your project and security vision..." />
                     </div>
                 </section>
 
@@ -223,10 +223,10 @@ export default function CreateBounty() {
                         <Wallet size={18} color="var(--primary)" /> Severity-Based Escrow Targets
                     </label>
                     <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1.5rem'}}>
-                        <div className="form-group"><label style={{color: '#ff2a5f', fontWeight: 'bold'}}>CRITICAL</label><input type="text" className="input-field" value={formData.reward_critical} onChange={e=>handleUpdate('reward_critical', e.target.value)} /></div>
-                        <div className="form-group"><label style={{color: '#ff8f00', fontWeight: 'bold'}}>HIGH</label><input type="text" className="input-field" value={formData.reward_high} onChange={e=>handleUpdate('reward_high', e.target.value)} /></div>
-                        <div className="form-group"><label style={{color: '#facc15', fontWeight: 'bold'}}>MEDIUM</label><input type="text" className="input-field" value={formData.reward_medium} onChange={e=>handleUpdate('reward_medium', e.target.value)} /></div>
-                        <div className="form-group"><label style={{color: '#10b981', fontWeight: 'bold'}}>LOW</label><input type="text" className="input-field" value={formData.reward_low} onChange={e=>handleUpdate('reward_low', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#ff2a5f', fontWeight: 'bold'}}>CRITICAL</label><input type="text" className="input-field" style={{fontSize: '1.1rem', fontFamily: 'var(--font-mono)'}} value={formData.reward_critical} onChange={e=>handleUpdate('reward_critical', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#ff8f00', fontWeight: 'bold'}}>HIGH</label><input type="text" className="input-field" style={{fontSize: '1.1rem', fontFamily: 'var(--font-mono)'}} value={formData.reward_high} onChange={e=>handleUpdate('reward_high', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#facc15', fontWeight: 'bold'}}>MEDIUM</label><input type="text" className="input-field" style={{fontSize: '1.1rem', fontFamily: 'var(--font-mono)'}} value={formData.reward_medium} onChange={e=>handleUpdate('reward_medium', e.target.value)} /></div>
+                        <div className="form-group"><label style={{color: '#10b981', fontWeight: 'bold'}}>LOW</label><input type="text" className="input-field" style={{fontSize: '1.1rem', fontFamily: 'var(--font-mono)'}} value={formData.reward_low} onChange={e=>handleUpdate('reward_low', e.target.value)} /></div>
                     </div>
                 </section>
 
@@ -257,11 +257,11 @@ export default function CreateBounty() {
                     <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2.5rem', marginBottom: '2.5rem'}}>
                         <div className="form-group">
                             <label>In-Scope Breakdown (Markdown)</label>
-                            <textarea className="input-field" style={{minHeight: '120px'}} value={formData.in_scope} onChange={e=>handleUpdate('in_scope', e.target.value)} />
+                            <textarea className="input-field" style={{minHeight: '120px', fontFamily: 'var(--font-mono)', fontSize: '0.9rem'}} value={formData.in_scope} onChange={e=>handleUpdate('in_scope', e.target.value)} />
                         </div>
                         <div className="form-group">
                             <label>Explicit Out-of-Scope (Markdown)</label>
-                            <textarea className="input-field" style={{minHeight: '120px'}} value={formData.out_of_scope} onChange={e=>handleUpdate('out_of_scope', e.target.value)} />
+                            <textarea className="input-field" style={{minHeight: '120px', fontFamily: 'var(--font-mono)', fontSize: '0.9rem'}} value={formData.out_of_scope} onChange={e=>handleUpdate('out_of_scope', e.target.value)} />
                         </div>
                     </div>
 
@@ -289,11 +289,11 @@ export default function CreateBounty() {
                     </div>
                     <div className="form-group" style={{marginBottom: '2rem'}}>
                         <label>Rules of Engagement (Markdown)</label>
-                        <textarea className="input-field" style={{minHeight: '100px'}} value={formData.rules} onChange={e=>handleUpdate('rules', e.target.value)} />
+                        <textarea className="input-field" style={{minHeight: '100px', fontFamily: 'var(--font-mono)', fontSize: '0.9rem'}} value={formData.rules} onChange={e=>handleUpdate('rules', e.target.value)} />
                     </div>
                     <div className="form-group">
                         <label>Legal Policy & Safe Harbor Statement (Markdown)</label>
-                        <textarea className="input-field" style={{minHeight: '100px'}} value={formData.safe_harbor} onChange={e=>handleUpdate('safe_harbor', e.target.value)} />
+                        <textarea className="input-field" style={{minHeight: '100px', fontFamily: 'var(--font-mono)', fontSize: '0.9rem'}} value={formData.safe_harbor} onChange={e=>handleUpdate('safe_harbor', e.target.value)} />
                     </div>
                 </section>
 
@@ -374,7 +374,7 @@ export default function CreateBounty() {
         </div>
 
         {/* RIGHT: LIVE DESIGN PREVIEW */}
-        <div style={{width: '45%', padding: '4rem 5rem', overflowY: 'auto', background: 'var(--bg-card)', position: 'sticky', top: 0, height: '100vh'}}>
+        <div style={{width: '45%', padding: '4rem 5rem', overflowY: 'auto', background: 'var(--bg-card)', position: 'sticky', top: '70px', height: 'calc(100vh - 70px)'}}>
             <div style={{display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '2rem'}}>
                 <div style={{width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981'}}></div>
                 <span style={{fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-muted)', letterSpacing: '2px'}}>LIVE ARCHITECT PREVIEW</span>
